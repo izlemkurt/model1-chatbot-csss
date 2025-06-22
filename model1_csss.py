@@ -1,17 +1,14 @@
-# ✅ PLACE THIS ENTIRE FILE INTO YOUR main.py OR app.py
-
 import streamlit as st
 import pandas as pd
 import uuid
 import os
+from openai import OpenAI
+from dotenv import load_dotenv
 from datetime import datetime
 
-# Set page config
-st.set_page_config(page_title="CSSS Chatbot", layout="centered")
-
-# Likert options
-likert_options = ["Never", "Rarely", "Sometimes", "Often", "Very Often"]
-likert_map = {opt: i+1 for i, opt in enumerate(likert_options)}
+load_dotenv()
+api_key = os.getenv("OPENAI_API_KEY")
+client = OpenAI(api_key=api_key)
 
 csss_questions = [
     "Felt anxious or distressed about personal relationships",
@@ -27,165 +24,128 @@ csss_questions = [
     "Felt overwhelmed by difficulties in your life"
 ]
 
-survey_questions = [
-    ("ease", "How easy was it to interact with this chatbot?"),
-    ("natural", "How natural did the conversation feel?"),
-    ("understood", "How much did you feel understood by the chatbot?"),
-    ("reflection", "How much did this chatbot help you reflect on your feelings?"),
-    ("support", "How emotionally supportive did this chatbot feel?"),
-    ("open_feedback", "What did you like or dislike about this chatbot experience?")
-]
+likert_options = ["Never", "Rarely", "Sometimes", "Often", "Very Often"]
 
-rating_labels = {
-    "1": "Very Poor",
-    "2": "Poor",
-    "3": "Neutral",
-    "4": "Good",
-    "5": "Excellent"
-}
+def generate_question_with_empathy(question):
+    prompt = f"""
+You are a supportive chatbot helping with a stress questionnaire for college students.
+Take this stress question:
+"{question}"
+1. Rephrase it in a more conversational, natural, and warm way.
+2. Add a brief empathetic comment after it.
+Return as a single short paragraph.
+"""
+    response = client.chat.completions.create(
+        model="gpt-4o",
+        messages=[{"role": "user", "content": prompt}]
+    )
+    return response.choices[0].message.content.strip()
 
-# Session state
-if "session_id" not in st.session_state:
-    st.session_state.session_id = str(uuid.uuid4())
-if "step" not in st.session_state:
-    st.session_state.step = 0
-if "answers" not in st.session_state:
-    st.session_state.answers = {}
-if "mode" not in st.session_state:
-    st.session_state.mode = "questions"
-if "survey" not in st.session_state:
-    st.session_state.survey = {}
+def generate_followup(question):
+    prompt = f"""
+Given this original question: "{question}", write ONE short, simple follow-up question that is also answerable on a Likert scale (Never to Very Often). Make it feel natural and empathetic.
+Return only the question.
+"""
+    response = client.chat.completions.create(
+        model="gpt-4o",
+        messages=[{"role": "user", "content": prompt}]
+    )
+    return response.choices[0].message.content.strip()
 
-# Styling
-st.markdown("""
-    <style>
-        .chat-container {
-            max-width: 600px;
-            margin: 20px auto;
-            background: white;
-            border-radius: 16px;
-            border: 1px solid #ddd;
-            box-shadow: 0 4px 12px rgba(0,0,0,0.06);
-            padding: 20px 20px 30px;
-            font-family: Arial, sans-serif;
-        }
-        .chat-container:empty {
-        padding: 0; margin: 0; min-height: 0;
-        }
-        .bot-msg, .user-msg {
-            margin: 12px 0;
-            padding: 12px 16px;
-            border-radius: 18px;
-            font-size: 15px;
-            line-height: 1.4;
-        }
-        .bot-msg {
-            background-color: #f1f1f1;
-            text-align: left;
-        }
-        .user-msg {
-            background-color: #9147ff;
-            color: white;
-            text-align: left;
-            margin-left: auto;
-            font-weight: 500;
-            border: 1px solid transparent;
-            width: fit-content;
-        }
-        .likert-row {
-            display: flex;
-            justify-content: flex-end;
-            gap: 12px;
-            margin-top: 16px;
-        }
-        .likert-row button {
-            background-color: white;
-            color: #9147ff;
-            border: 2px solid #9147ff;
-            border-radius: 20px;
-            padding: 8px 16px;
-            font-size: 14px;
-            font-weight: 500;
-            cursor: pointer;
-        }
-        .likert-row button:hover {
-            background-color: #9147ff;
-            color: white;
-        }
-        h4 {
-            text-align: center;
-            margin-top: 0;
-        }
-    </style>
-""", unsafe_allow_html=True)
+def run_chatbot(user_email):
+    # Use session state for chat-like experience
+    if "m1_step" not in st.session_state:
+        st.session_state.m1_step = 0
+        st.session_state.m1_responses = []
+        st.session_state.m1_followup = False
+        st.session_state.m1_followup_q = ""
+        st.session_state.m1_followup_idx = None
+        st.session_state.m1_paraphrased = []
 
-# Main container
-st.markdown("<div class='chat-container'>", unsafe_allow_html=True)
-st.markdown("<h4>College Student Stress Chatbot</h4>", unsafe_allow_html=True)
+    st.markdown(
+        """
+        <style>
+        .chat-bubble-bot {background:#e3f2fd; color:#111; margin-bottom:10px; padding:14px 18px;border-radius:18px;font-size:16px;}
+        .chat-bubble-user {background:#2196f3;color:#fff;margin-left:auto;font-weight:500;width:fit-content;margin-bottom:12px;padding:14px 18px;border-radius:18px;font-size:16px;}
+        </style>
+        """, unsafe_allow_html=True
+    )
 
-# Survey page
-if st.session_state.mode == "survey":
-    st.markdown("<div class='bot-msg'>Thanks for completing the questions! Now please share your feedback about the experience:</div>", unsafe_allow_html=True)
-    with st.form(key="survey_form"):
-        for key, question in survey_questions[:-1]:
-            st.session_state.survey[key] = st.radio(
-                question,
-                [f"{i} ({rating_labels[str(i)]})" for i in range(1, 6)],
-                key=key
+    st.markdown("<h4 style='text-align:center;margin-bottom:2rem;'>College Student Stress Chatbot</h4>", unsafe_allow_html=True)
+    st.write("Each question will be phrased in a friendly, conversational way. Please answer using the buttons below.")
+
+    # Paraphrase all questions once per session (and cache for fast re-runs)
+    while len(st.session_state.m1_paraphrased) < len(csss_questions):
+        with st.spinner("Wording question..."):
+            st.session_state.m1_paraphrased.append(
+                generate_question_with_empathy(csss_questions[len(st.session_state.m1_paraphrased)])
             )
-        st.session_state.survey["open_feedback"] = st.text_area(survey_questions[-1][1], key="open_feedback")
-        submitted = st.form_submit_button("Submit Feedback")
-        if submitted:
-            timestamp = datetime.now().isoformat()
-            final_row = {"user_id": st.session_state.session_id, "timestamp": timestamp}
-            for q_key, ans in st.session_state.answers.items():
-                final_row[q_key] = likert_map[ans]
-            final_row.update(st.session_state.survey)
-            df = pd.DataFrame([final_row])
-            file = "csss_model1_responses_chatbot.csv"
-            if os.path.exists(file):
-                existing = pd.read_csv(file)
-                combined = pd.concat([existing, df], ignore_index=True)
-                combined.to_csv(file, index=False)
-            else:
-                df.to_csv(file, index=False)
 
-            st.success("All responses submitted. Thank you!")
+    # Show previous questions and answers as chat bubbles
+    for i, entry in enumerate(st.session_state.m1_responses):
+        st.markdown(f"<div class='chat-bubble-bot'>{entry['paraphrased']}</div>", unsafe_allow_html=True)
+        st.markdown(f"<div class='chat-bubble-user'>{entry['response']}</div>", unsafe_allow_html=True)
+        if 'follow_up' in entry:
+            st.markdown(f"<div class='chat-bubble-bot'>{entry['follow_up']}</div>", unsafe_allow_html=True)
+            st.markdown(f"<div class='chat-bubble-user'>{entry['follow_up_response']}</div>", unsafe_allow_html=True)
 
-elif st.session_state.mode == "questions":
-    # Intro message
-    if st.session_state.step == 0:
-        st.markdown("<div class='bot-msg'>Hi, I'm here to check in on how you've been feeling lately. Let's go through a few quick questions.</div>", unsafe_allow_html=True)
-
-    # Show previous questions and user answers
-    for i in range(st.session_state.step):
-        st.markdown(f"<div class='bot-msg'>{csss_questions[i]}</div>", unsafe_allow_html=True)
-        answer = st.session_state.answers.get(f"Q{i+1}", "")
-        if answer:
-            st.markdown(f"<div class='user-msg'>{answer}</div>", unsafe_allow_html=True)
-
-    # Show current question and likert options
-    if st.session_state.step < len(csss_questions):
-        idx = st.session_state.step
-        question = csss_questions[idx]
-        st.markdown(f"<div class='bot-msg'>{question}</div>", unsafe_allow_html=True)
-
-        # Button row
-        st.markdown('<div class="likert-row">', unsafe_allow_html=True)
-        cols = st.columns(len(likert_options))
-        for i, opt in enumerate(likert_options):
-            with cols[i]:
-                if st.button(opt, key=f"{idx}_{opt}"):
-                    st.session_state.answers[f"Q{idx+1}"] = opt
-                    st.session_state.step += 1
-                    st.rerun()
-        st.markdown('</div>', unsafe_allow_html=True)
-
-    # Submit screen
-    elif st.session_state.step == len(csss_questions):
-        st.markdown("<div class='bot-msg'>That's all the questions! Click below to continue.</div>", unsafe_allow_html=True)
-        if st.button("Go to Feedback Survey"):
-            st.session_state.mode = "survey"
+    # Ask follow-up if needed
+    if st.session_state.m1_followup:
+        st.markdown(f"<div class='chat-bubble-bot'>{st.session_state.m1_followup_q}</div>", unsafe_allow_html=True)
+        fup_ans = st.radio(
+            "Your answer:", likert_options, key=f"fup_{st.session_state.m1_followup_idx}", index=None
+        )
+        if fup_ans:
+            # Save followup answer
+            st.session_state.m1_responses[st.session_state.m1_followup_idx]["follow_up"] = st.session_state.m1_followup_q
+            st.session_state.m1_responses[st.session_state.m1_followup_idx]["follow_up_response"] = fup_ans
+            st.session_state.m1_followup = False
+            st.session_state.m1_step += 1
             st.rerun()
+        st.stop()
 
-st.markdown("</div>", unsafe_allow_html=True)
+    # Main question loop
+    if st.session_state.m1_step < len(csss_questions):
+        i = st.session_state.m1_step
+        paraphrased = st.session_state.m1_paraphrased[i]
+        st.markdown(f"<div class='chat-bubble-bot'>{paraphrased}</div>", unsafe_allow_html=True)
+        answer = st.radio(
+            "Your answer:", likert_options, key=f"main_{i}", index=None
+        )
+        if answer:
+            entry = {
+                "question": csss_questions[i],
+                "paraphrased": paraphrased,
+                "response": answer
+            }
+            st.session_state.m1_responses.append(entry)
+            # If answer is Often/Very Often, ask follow-up
+            if answer in ["Often", "Very Often"]:
+                followup_q = generate_followup(csss_questions[i])
+                st.session_state.m1_followup = True
+                st.session_state.m1_followup_q = followup_q
+                st.session_state.m1_followup_idx = i
+                st.rerun()
+            else:
+                st.session_state.m1_step += 1
+                st.rerun()
+        st.stop()
+
+    # Finish and submit
+    st.success("You've completed all questions! Click below to submit your responses.")
+    if st.button("Submit Survey"):
+        df = pd.DataFrame(st.session_state.m1_responses)
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        session_id = str(uuid.uuid4())
+        filename = f"model1_{session_id}.csv"
+        df["email"] = user_email
+        df.to_csv(filename, index=False)
+        st.success("Responses submitted and saved successfully.")
+        st.write(f"Saved as: {filename}")
+        # Optionally clear state for new run
+        st.session_state.m1_step = 0
+        st.session_state.m1_responses = []
+        st.session_state.m1_followup = False
+        st.session_state.m1_followup_q = ""
+        st.session_state.m1_followup_idx = None
+        st.session_state.m1_paraphrased = []
