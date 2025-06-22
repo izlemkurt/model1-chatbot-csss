@@ -6,6 +6,7 @@ import json
 from datetime import datetime
 from openai import OpenAI
 from dotenv import load_dotenv
+import traceback
 
 # ==== GOOGLE SHEETS SETUP ====
 import gspread
@@ -31,12 +32,37 @@ def get_gsheet():
     sheet = client.open_by_key(GOOGLE_SHEET_ID).sheet1  # first worksheet
     return sheet
 
+# def save_to_gsheet(row_dict):
+#     sheet = get_gsheet()
+#     existing = sheet.get_all_records()
+#     if not existing:  # Sheet is empty, set headers as first row
+#         sheet.insert_row(list(row_dict.keys()), 1)
+#     sheet.append_row(list(row_dict.values()))
+
+
+
 def save_to_gsheet(row_dict):
-    sheet = get_gsheet()
-    existing = sheet.get_all_records()
-    if not existing:  # Sheet is empty, set headers as first row
-        sheet.insert_row(list(row_dict.keys()), 1)
-    sheet.append_row(list(row_dict.values()))
+    try:
+        st.write("🔍 Saving to Google Sheet...")
+        st.write("Row to save:", row_dict)
+
+        sheet = get_gsheet()
+        st.write("✅ Google Sheet loaded")
+
+        existing = sheet.get_all_records()
+        st.write(f"📄 Existing rows: {len(existing)}")
+
+        if not existing:
+            sheet.insert_row(list(row_dict.keys()), 1)
+            st.write("📝 Header row inserted")
+
+        sheet.append_row(list(row_dict.values()))
+        st.success("✅ Row successfully saved to Google Sheet")
+
+    except Exception as e:
+        st.error("❌ Error saving to Google Sheet")
+        st.text(traceback.format_exc())
+
 
 # --- Setup OpenAI ---
 load_dotenv()
